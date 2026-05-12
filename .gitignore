@@ -24,3 +24,6 @@ Thumbs.db
 
 # Markdown docs (project instructions, not for remote)
 *.md
+
+# Claude local config
+.claude/settings.local.json

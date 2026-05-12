@@ -1,0 +1,295 @@
+<template>
+  <div>
+    <div class="topbar">
+      <div>
+        <h2>PC 详情</h2>
+        <p v-if="device">{{ device.hostname || device.mac }} — 远程管控</p>
+      </div>
+      <div class="toolbar">
+        <button class="btn" @click="router.back()">返回列表</button>
+      </div>
+    </div>
+
+    <a-spin :spinning="loading">
+    <!-- Basic Info -->
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <h3>基本信息</h3>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="notice">
+          <table style="width:100%;">
+            <tr><td style="width:100px;color:#999;">主机名</td><td>{{ device?.hostname || '-' }}</td></tr>
+            <tr><td style="color:#999;">IP</td><td>{{ device?.ip || '-' }}</td></tr>
+            <tr><td style="color:#999;">MAC</td><td>{{ device?.mac || '-' }}</td></tr>
+            <tr><td style="color:#999;">系统版本</td><td>{{ device?.osVersion || '-' }}</td></tr>
+            <tr><td style="color:#999;">客户端版本</td><td>{{ device?.agentVersion || '-' }}</td></tr>
+            <tr><td style="color:#999;">状态</td>
+              <td>
+                <span :class="['tag', deviceStatus === 'online' ? 'tag-success' : '']">
+                  {{ deviceStatus === 'online' ? '在线' : '离线' }}
+                </span>
+              </td>
+            </tr>
+            <tr><td style="color:#999;">最后心跳</td><td>{{ device?.lastHeartbeat ? formatTime(device.lastHeartbeat) : '-' }}</td></tr>
+            <tr><td style="color:#999;">备注</td><td>{{ device?.remark || '-' }}</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <h3>远程操作</h3>
+          <div class="sub">指令将通过 PC Agent 下发执行</div>
+        </div>
+      </div>
+      <div class="section-body">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <button class="btn" @click="handleCommand('PROCESSES')" :disabled="deviceStatus !== 'online' || processLoading">
+            {{ processLoading ? '获取中...' : '获取进程列表' }}
+          </button>
+          <button class="btn" @click="handleCommand('LOCK_SCREEN')" :disabled="deviceStatus !== 'online'">远程锁屏</button>
+          <button class="btn btn-danger" @click="confirmAction = 'SHUTDOWN'; showConfirm = true" :disabled="deviceStatus !== 'online'">远程关机</button>
+          <button class="btn btn-danger" @click="confirmAction = 'RESTART'; showConfirm = true" :disabled="deviceStatus !== 'online'">远程重启</button>
+          <button class="btn" @click="handleCommand('LOGOFF')" :disabled="deviceStatus !== 'online'">注销用户</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Process List -->
+    <div class="section" v-if="processes.length > 0">
+      <div class="section-header">
+        <div>
+          <h3>进程列表</h3>
+          <div class="sub">共 {{ processes.length }} 个进程</div>
+        </div>
+        <button class="btn btn-mini" @click="processes = []; commands = []; refreshCommands()">关闭</button>
+      </div>
+      <div class="section-body">
+        <div class="filters">
+          <div class="field"><label>筛选</label><input v-model="processFilter" placeholder="输入进程名" /></div>
+        </div>
+        <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
+          <table>
+            <thead>
+              <tr><th>进程名</th><th>PID</th><th>会话名</th><th>内存使用</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="(p, i) in filteredProcesses" :key="i">
+                <td>{{ p.name }}</td>
+                <td>{{ p.pid }}</td>
+                <td>{{ p.sessionName || '-' }}</td>
+                <td>{{ p.memUsage || '-' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Command History -->
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <h3>指令历史</h3>
+          <div class="sub">最近操作记录</div>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>指令类型</th><th>状态</th><th>创建时间</th><th>完成时间</th><th>结果</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="(c, i) in commands" :key="i">
+                <td>{{ commandLabel(c.commandType) }}</td>
+                <td>
+                  <span :class="['tag', statusClass(c.status)]">{{ statusLabel(c.status) }}</span>
+                </td>
+                <td>{{ c.createTime ? formatTime(c.createTime) : '-' }}</td>
+                <td>{{ c.completeTime ? formatTime(c.completeTime) : '-' }}</td>
+                <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                  {{ c.status === 'success' ? '执行成功' : c.errorMessage || '-' }}
+                </td>
+              </tr>
+              <tr v-if="commands.length === 0">
+                <td colspan="5" style="text-align:center;color:#999;padding:40px 0;">暂无指令记录</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirm modal -->
+    <div class="modal-mask" v-if="showConfirm" @click.self="showConfirm = false">
+      <div class="modal" style="max-width:400px;">
+        <div class="modal-header">
+          <h3>确认操作</h3>
+          <button class="close" @click="showConfirm = false">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin-bottom:16px;">确认远程{{ actionLabel(confirmAction) }}该 PC？</p>
+          <p style="color:#999;font-size:13px;">
+            {{ confirmAction === 'SHUTDOWN' ? '系统将在 30 秒后关闭。' : '系统将在 30 秒后重启。' }}
+          </p>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button class="btn" @click="showConfirm = false">取消</button>
+            <button class="btn btn-danger" @click="confirmSend">确认{{ actionLabel(confirmAction) }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    </a-spin>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { message } from 'ant-design-vue'
+import { getPcDeviceDetail, sendCommand, getPcCommandList } from '../api/pc'
+
+const route = useRoute()
+const router = useRouter()
+const deviceId = Number(route.params.id)
+
+const device = ref<any>(null)
+const loading = ref(false)
+const processLoading = ref(false)
+const showConfirm = ref(false)
+const confirmAction = ref('SHUTDOWN')
+
+const processes = ref<any[]>([])
+const processFilter = ref('')
+const commands = ref<any[]>([])
+
+const filteredProcesses = computed(() => {
+  if (!processFilter.value) return processes.value
+  return processes.value.filter((p: any) =>
+    (p.name || '').toLowerCase().includes(processFilter.value.toLowerCase())
+  )
+})
+
+const deviceStatus = computed(() => {
+  if (!device.value) return 'offline'
+  if (!device.value.lastHeartbeat) return 'offline'
+  const now = Date.now()
+  const hb = new Date(device.value.lastHeartbeat).getTime()
+  return (now - hb) < 30000 ? 'online' : 'offline'
+})
+
+function formatTime(t: string) {
+  return t ? t.replace('T', ' ').substring(0, 19) : '-'
+}
+
+function commandLabel(type: string) {
+  const map: Record<string, string> = {
+    PROCESSES: '获取进程',
+    LOCK_SCREEN: '锁屏',
+    SHUTDOWN: '关机',
+    RESTART: '重启',
+    LOGOFF: '注销'
+  }
+  return map[type] || type
+}
+
+function statusLabel(s: string) {
+  const map: Record<string, string> = {
+    pending: '待下发',
+    sent: '已下发',
+    executing: '执行中',
+    success: '成功',
+    failed: '失败'
+  }
+  return map[s] || s
+}
+
+function statusClass(s: string) {
+  if (s === 'success') return 'tag-success'
+  if (s === 'failed') return 'tag-danger'
+  if (s === 'sent' || s === 'executing') return 'tag-warning'
+  return ''
+}
+
+function actionLabel(a: string) {
+  return a === 'SHUTDOWN' ? '关机' : '重启'
+}
+
+async function loadDevice() {
+  loading.value = true
+  try {
+    const res: any = await getPcDeviceDetail(deviceId)
+    device.value = res.data
+  } catch (e) { console.error(e) } finally { loading.value = false }
+}
+
+async function refreshCommands() {
+  try {
+    const res: any = await getPcCommandList({ pcDeviceId: deviceId, page: 1, size: 20 })
+    commands.value = res.data?.list || []
+  } catch (e) { console.error(e) }
+}
+
+async function handleCommand(type: string) {
+  if (type === 'PROCESSES') {
+    processLoading.value = true
+  }
+  try {
+    await sendCommand(deviceId, type)
+    if (type === 'PROCESSES') {
+      message.success('进程列表获取指令已下发，请稍后点击"关闭"重新打开查看结果')
+    } else {
+      message.success('指令已下发')
+    }
+    // Poll for result after a short delay
+    setTimeout(pollProcessResult, 3000)
+    setTimeout(refreshCommands, 2000)
+  } catch (e) {
+    message.error('指令下发失败')
+    processLoading.value = false
+  }
+}
+
+async function pollProcessResult() {
+  if (processLoading.value === false) return // already resolved
+  try {
+    const res: any = await getPcCommandList({ pcDeviceId: deviceId, commandType: 'PROCESSES', page: 1, size: 1 })
+    const cmds = res.data?.list || []
+    if (cmds.length > 0 && cmds[0].status === 'success') {
+      try {
+        processes.value = JSON.parse(cmds[0].result || '[]')
+      } catch { processes.value = [] }
+      processLoading.value = false
+      message.success(`获取到 ${processes.value.length} 个进程`)
+    } else if (cmds.length > 0 && cmds[0].status === 'failed') {
+      processLoading.value = false
+      message.error('获取进程列表失败')
+    } else {
+      setTimeout(pollProcessResult, 3000)
+    }
+  } catch {
+    setTimeout(pollProcessResult, 3000)
+  }
+}
+
+async function confirmSend() {
+  try {
+    await sendCommand(deviceId, confirmAction.value)
+    message.success('指令已下发')
+    showConfirm.value = false
+    setTimeout(refreshCommands, 2000)
+  } catch (e) { message.error('指令下发失败') }
+}
+
+onMounted(() => {
+  loadDevice()
+  refreshCommands()
+})
+</script>

@@ -12,7 +12,9 @@ const router = createRouter({
         { path: 'blacklist', name: 'Blacklist', component: () => import('../views/Blacklist.vue') },
         { path: 'supervision', name: 'Supervision', component: () => import('../views/Supervision.vue') },
         { path: 'whitelist', name: 'Whitelist', component: () => import('../views/Whitelist.vue') },
-        { path: 'logs', name: 'Logs', component: () => import('../views/Logs.vue') }
+        { path: 'logs', name: 'Logs', component: () => import('../views/Logs.vue') },
+        { path: 'pc', name: 'PcManagement', component: () => import('../views/PcManagement.vue') },
+        { path: 'pc/detail/:id', name: 'PcDetail', component: () => import('../views/PcDetail.vue') }
       ]
     }
   ]

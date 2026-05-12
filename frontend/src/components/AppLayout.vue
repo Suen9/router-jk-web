@@ -53,7 +53,8 @@ const navItems = [
   { path: '/blacklist', title: '黑名单管理', desc: 'Blacklist' },
   { path: '/supervision', title: '监管设备', desc: 'Supervision' },
   { path: '/whitelist', title: '白名单管理', desc: 'Whitelist' },
-  { path: '/logs', title: '日志中心', desc: 'Logs' }
+  { path: '/logs', title: '日志中心', desc: 'Logs' },
+  { path: '/pc', title: 'PC管控', desc: 'PC Agents' }
 ]
 
 function onNavClick() {
