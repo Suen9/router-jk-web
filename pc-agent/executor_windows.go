@@ -6,10 +6,13 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ProcessInfo 进程信息结构
@@ -161,10 +164,16 @@ func (e *platformExecutor) logoff() CommandResult {
 }
 
 // showMessage 远程弹窗显示消息
-// params 为 JSON 格式 {"message": "要显示的内容"}
+// params 为 JSON 格式：
+//
+//	{"message": "内容"}  — 简单弹窗
+//	{"message": "内容", "extendPrompt": true, "ruleId": 123, "extendMinutes": 10}  — 含延长按钮
 func (e *platformExecutor) showMessage(params string) CommandResult {
 	var req struct {
-		Message string `json:"message"`
+		Message       string `json:"message"`
+		ExtendPrompt  bool   `json:"extendPrompt"`
+		RuleID        uint64 `json:"ruleId"`
+		ExtendMinutes int    `json:"extendMinutes"`
 	}
 	if err := json.Unmarshal([]byte(params), &req); err != nil {
 		return CommandResult{Success: false, Error: fmt.Sprintf("参数解析失败: %v", err)}
@@ -175,22 +184,92 @@ func (e *platformExecutor) showMessage(params string) CommandResult {
 
 	// 方式1：使用 msg.exe（系统原生弹窗，始终置顶，Session 0 隔离下也能正常工作）
 	msg := exec.Command("msg", "*", "/TIME:120", req.Message)
-	if err := msg.Run(); err == nil {
-		return CommandResult{Success: true, Result: "消息已发送"}
-	}
-
-	// 方式2：回退到 PowerShell MessageBox（使用 DefaultDesktopOnly 确保置顶显示）
-	escaped := strings.ReplaceAll(req.Message, "'", "''")
-	psCmd := fmt.Sprintf(
-		`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('%s', '系统消息', 'OK', 'Information', 'Button1', 'DefaultDesktopOnly')`,
-		escaped,
-	)
-	ps := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
-	if err := ps.Run(); err != nil {
-		return CommandResult{
-			Success: false,
-			Error:   fmt.Sprintf("弹窗失败(msg和PowerShell均不可用): %v", err),
+	if err := msg.Run(); err != nil {
+		// 方式2：回退到 PowerShell MessageBox（使用 DefaultDesktopOnly 确保置顶显示）
+		escaped := strings.ReplaceAll(req.Message, "'", "''")
+		psCmd := fmt.Sprintf(
+			`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('%s', '系统消息', 'OK', 'Information', 'Button1', 'DefaultDesktopOnly')`,
+			escaped,
+		)
+		ps := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+		if err := ps.Run(); err != nil {
+			return CommandResult{
+				Success: false,
+				Error:   fmt.Sprintf("弹窗失败(msg和PowerShell均不可用): %v", err),
+			}
 		}
 	}
+
+	// 如果包含延长按钮信息，启动交互式延长对话框
+	if req.ExtendPrompt && req.RuleID > 0 && req.ExtendMinutes > 0 {
+		e.launchExtendPrompt(req.Message, req.RuleID, req.ExtendMinutes)
+	}
+
 	return CommandResult{Success: true, Result: "消息已发送"}
+}
+
+// launchExtendPrompt 启动交互式延长对话框（通过 schtasks 在用户会话中运行）
+func (e *platformExecutor) launchExtendPrompt(message string, ruleID uint64, minutes int) {
+	extendURL := fmt.Sprintf("%s/api/supervision/extend/%d", e.backendURL, ruleID)
+	body := fmt.Sprintf(`{"minutes":%d}`, minutes)
+	psMsg := strings.ReplaceAll(message, "'", "''")
+
+	// 生成 PowerShell 窗体脚本
+	psScript := fmt.Sprintf(`
+Add-Type -AssemblyName System.Windows.Forms
+$form = New-Object Windows.Forms.Form
+$form.Text = '使用时间预警'
+$form.Width = 400
+$form.Height = 150
+$form.StartPosition = 'CenterScreen'
+$form.TopMost = $true
+$form.FormBorderStyle = 'FixedDialog'
+$form.ControlBox = $false
+$label = New-Object Windows.Forms.Label
+$label.Text = '%s'
+$label.Font = New-Object Drawing.Font('Microsoft YaHei', 11)
+$label.AutoSize = $true
+$label.Location = New-Object Drawing.Point(20, 25)
+$form.Controls.Add($label)
+$btnExtend = New-Object Windows.Forms.Button
+$btnExtend.Text = '延长%d分钟'
+$btnExtend.Width = 120
+$btnExtend.Height = 35
+$btnExtend.Location = New-Object Drawing.Point(80, 70)
+$btnExtend.Add_Click({
+	try {
+		$wc = New-Object System.Net.WebClient
+		$null = $wc.UploadString('%s', 'POST', '%s')
+	} catch {}
+	$form.Close()
+})
+$form.Controls.Add($btnExtend)
+$btnClose = New-Object Windows.Forms.Button
+$btnClose.Text = '关闭'
+$btnClose.Width = 80
+$btnClose.Height = 35
+$btnClose.Location = New-Object Drawing.Point(220, 70)
+$btnClose.Add_Click({ $form.Close() })
+$form.Controls.Add($btnClose)
+$form.ShowDialog()
+`, psMsg, minutes, extendURL, body)
+
+	// 写入临时脚本文件
+	taskName := fmt.Sprintf("PCAgentExtend_%d_%d", time.Now().Unix(), ruleID)
+	psPath := filepath.Join(os.TempDir(), taskName+".ps1")
+	if err := os.WriteFile(psPath, []byte(psScript), 0644); err != nil {
+		return
+	}
+
+	// 通过 schtasks 以交互用户身份运行（Session 0 → 用户桌面）
+	psCmd := fmt.Sprintf(`powershell -ExecutionPolicy Bypass -File "%s"`, psPath)
+	_ = exec.Command("schtasks", "/create", "/tn", taskName, "/ru", "INTERACTIVE",
+		"/tr", psCmd, "/sc", "ONCE", "/st", "00:00", "/f").Run()
+	_ = exec.Command("schtasks", "/run", "/tn", taskName).Run()
+
+	// 5 分钟后清理临时文件和任务
+	time.AfterFunc(5*time.Minute, func() {
+		_ = exec.Command("schtasks", "/delete", "/tn", taskName, "/f").Run()
+		_ = os.Remove(psPath)
+	})
 }

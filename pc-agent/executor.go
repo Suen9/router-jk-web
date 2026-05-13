@@ -15,11 +15,13 @@ type Executor interface {
 }
 
 // NewExecutor 创建当前平台对应的指令执行器
-func NewExecutor() Executor {
-	return &platformExecutor{}
+func NewExecutor(backendURL string) Executor {
+	return &platformExecutor{backendURL: backendURL}
 }
 
-type platformExecutor struct{}
+type platformExecutor struct {
+	backendURL string // 后端地址，用于交互式弹窗调用延长 API
+}
 
 // Execute 根据指令类型分发执行
 func (e *platformExecutor) Execute(commandType string, params string) CommandResult {

@@ -394,15 +394,18 @@ public class MonitorScheduler {
                             hostname, TICK_SECONDS, sessionSeconds, sessionSeconds / 60,
                             usedTodaySeconds, usedTodaySeconds / 60);
 
-                    // 单次时长 5 分钟预警
+                    // 单次时长 5 分钟预警（含延长按钮）
                     int singleLimitMin = rule.getSingleDuration() != null ? rule.getSingleDuration() : 0;
                     int sessionUsedMin = sessionSeconds / 60;
                     if (singleLimitMin > 5 && blacklistedFlag == 0) {
                         int remainingMin = singleLimitMin - sessionUsedMin;
                         if (remainingMin > 0 && remainingMin <= 5 && warnedPcRules.add(rule.getId())) {
-                            pcCommandService.create(pcDevice.getId(), "SHOW_MESSAGE",
-                                    "{\"message\":\"单次使用时间还剩 " + remainingMin + " 分钟，请及时保存工作\"}");
-                            log.info("[PC:{}] >>> 发送使用预警: 还剩{}分钟(已用{}/{}分钟)",
+                            String extendParams = String.format(
+                                "{\"message\":\"单次使用时间还剩 %d 分钟\",\"extendPrompt\":true,\"ruleId\":%d,\"extendMinutes\":10}",
+                                remainingMin, rule.getId()
+                            );
+                            pcCommandService.create(pcDevice.getId(), "SHOW_MESSAGE", extendParams);
+                            log.info("[PC:{}] >>> 发送使用预警: 还剩{}分钟(已用{}/{}分钟), 含延长按钮",
                                     hostname, remainingMin, sessionUsedMin, singleLimitMin);
                         }
                     }

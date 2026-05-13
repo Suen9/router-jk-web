@@ -77,7 +77,7 @@ func main() {
 	}
 
 	// 初始化指令执行器
-	executor := NewExecutor()
+	executor := NewExecutor(cfg.BackendURL)
 
 	// 捕获退出信号
 	sigCh := make(chan os.Signal, 1)
