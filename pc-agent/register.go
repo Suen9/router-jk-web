@@ -32,13 +32,42 @@ func getMacAddr() (string, error) {
 
 // getLocalIP 获取本机内网 IP 地址
 func getLocalIP() (string, error) {
-	conn, err := net.Dial("udp", "192.168.10.1:80")
+	// 方法1：尝试连接外部地址获取本机IP（UDP无实际连接，仅用于获取出站IP）
+	conn, err := net.Dial("udp", "10.0.0.1:80")
+	if err == nil {
+		defer conn.Close()
+		localAddr := conn.LocalAddr().(*net.UDPAddr)
+		return localAddr.IP.String(), nil
+	}
+
+	// 方法2：遍历网卡获取第一个非回环 IPv4 地址
+	interfaces, err := net.Interfaces()
 	if err != nil {
 		return "", fmt.Errorf("获取本机IP失败: %w", err)
 	}
-	defer conn.Close()
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String(), nil
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ipv4 := ipnet.IP.To4()
+			if ipv4 != nil && !ipv4.IsLoopback() {
+				return ipv4.String(), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("未找到有效IP地址")
 }
 
 // getHostname 获取主机名

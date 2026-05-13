@@ -66,7 +66,7 @@
       <div class="section-header">
         <div>
           <h3>进程列表</h3>
-          <div class="sub">共 {{ processes.length }} 个进程</div>
+          <div class="sub">内存占用最高的20个进程</div>
         </div>
         <button class="btn btn-mini" @click="processes = []; commands = []; refreshCommands()">关闭</button>
       </div>
@@ -77,7 +77,7 @@
         <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
           <table>
             <thead>
-              <tr><th>进程名</th><th>PID</th><th>会话名</th><th>内存使用</th></tr>
+              <tr><th>进程名</th><th>PID</th><th>会话名</th><th>内存使用</th><th>操作</th></tr>
             </thead>
             <tbody>
               <tr v-for="(p, i) in filteredProcesses" :key="i">
@@ -85,6 +85,9 @@
                 <td>{{ p.pid }}</td>
                 <td>{{ p.sessionName || '-' }}</td>
                 <td>{{ p.memUsage || '-' }}</td>
+                <td>
+                  <button class="btn btn-mini btn-danger" @click="confirmKill(p)" :disabled="deviceStatus !== 'online'">结束</button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -127,7 +130,7 @@
       </div>
     </div>
 
-    <!-- Confirm modal -->
+    <!-- Confirm modal (shutdown/restart) -->
     <div class="modal-mask" v-if="showConfirm" @click.self="showConfirm = false">
       <div class="modal" style="max-width:400px;">
         <div class="modal-header">
@@ -146,6 +149,26 @@
         </div>
       </div>
     </div>
+
+    <!-- Kill process confirm modal -->
+    <div class="modal-mask" v-if="showKillConfirm" @click.self="showKillConfirm = false">
+      <div class="modal" style="max-width:400px;">
+        <div class="modal-header">
+          <h3>确认结束进程</h3>
+          <button class="close" @click="showKillConfirm = false">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin-bottom:16px;">
+            确认结束进程 <strong>{{ killTarget?.name }}</strong>（PID: {{ killTarget?.pid }}）？
+          </p>
+          <p style="color:red;font-size:13px;">结束进程可能导致数据丢失，请谨慎操作。</p>
+          <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">
+            <button class="btn" @click="showKillConfirm = false">取消</button>
+            <button class="btn btn-danger" @click="doKillProcess" :disabled="killingProcess">{{ killingProcess ? '执行中...' : '确认结束' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
     </a-spin>
   </div>
 </template>
@@ -153,7 +176,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { message } from 'ant-design-vue'
+import { message, modal } from 'ant-design-vue'
 import { getPcDeviceDetail, sendCommand, getPcCommandList } from '../api/pc'
 
 const route = useRoute()
@@ -169,6 +192,9 @@ const confirmAction = ref('SHUTDOWN')
 const processes = ref<any[]>([])
 const processFilter = ref('')
 const commands = ref<any[]>([])
+const showKillConfirm = ref(false)
+const killTarget = ref<any>(null)
+const killingProcess = ref(false)
 
 const filteredProcesses = computed(() => {
   if (!processFilter.value) return processes.value
@@ -195,7 +221,8 @@ function commandLabel(type: string) {
     LOCK_SCREEN: '锁屏',
     SHUTDOWN: '关机',
     RESTART: '重启',
-    LOGOFF: '注销'
+    LOGOFF: '注销',
+    KILL_PROCESS: '结束进程'
   }
   return map[type] || type
 }
@@ -286,6 +313,23 @@ async function confirmSend() {
     showConfirm.value = false
     setTimeout(refreshCommands, 2000)
   } catch (e) { message.error('指令下发失败') }
+}
+
+function confirmKill(p: any) {
+  killTarget.value = p
+  showKillConfirm.value = true
+}
+
+async function doKillProcess() {
+  if (!killTarget.value) return
+  killingProcess.value = true
+  try {
+    await sendCommand(deviceId, 'KILL_PROCESS', JSON.stringify({ pid: killTarget.value.pid }))
+    message.success('结束进程指令已下发')
+    showKillConfirm.value = false
+    killTarget.value = null
+    setTimeout(refreshCommands, 2000)
+  } catch (e) { message.error('指令下发失败') } finally { killingProcess.value = false }
 }
 
 onMounted(() => {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -17,26 +18,22 @@ type ProcessInfo struct {
 	PID         int    `json:"pid"`
 	SessionName string `json:"sessionName"`
 	MemUsage    string `json:"memUsage"`
+	// 仅用于排序的内存字节数，不返回给前端
+	memBytes int64
 }
 
-// getProcesses 执行 tasklist 命令获取进程列表，返回 JSON 格式结果
+// getProcesses 获取按内存占用降序排列的前20个进程
 func (e *platformExecutor) getProcesses() CommandResult {
 	cmd := exec.Command("tasklist", "/FO", "CSV", "/NH")
 	output, err := cmd.Output()
 	if err != nil {
-		return CommandResult{
-			Success: false,
-			Error:   fmt.Sprintf("执行tasklist失败: %v", err),
-		}
+		return CommandResult{Success: false, Error: fmt.Sprintf("执行tasklist失败: %v", err)}
 	}
 
 	reader := csv.NewReader(strings.NewReader(string(output)))
 	records, err := reader.ReadAll()
 	if err != nil {
-		return CommandResult{
-			Success: false,
-			Error:   fmt.Sprintf("解析tasklist输出失败: %v", err),
-		}
+		return CommandResult{Success: false, Error: fmt.Sprintf("解析tasklist输出失败: %v", err)}
 	}
 
 	var processes []ProcessInfo
@@ -45,25 +42,89 @@ func (e *platformExecutor) getProcesses() CommandResult {
 			continue
 		}
 		pid, _ := strconv.Atoi(strings.TrimSpace(record[1]))
-		processes = append(processes, ProcessInfo{
+		memStr := strings.Trim(record[4], "\"")
+		p := ProcessInfo{
 			Name:        strings.Trim(record[0], "\""),
 			PID:         pid,
 			SessionName: strings.Trim(record[2], "\""),
-			MemUsage:    strings.Trim(record[4], "\""),
-		})
+			MemUsage:    memStr,
+			memBytes:    parseMemBytes(memStr),
+		}
+		processes = append(processes, p)
 	}
 
-	result, err := toJSON(processes)
+	// 按内存占用降序排列，取前20
+	sort.Slice(processes, func(i, j int) bool {
+		return processes[i].memBytes > processes[j].memBytes
+	})
+	if len(processes) > 20 {
+		processes = processes[:20]
+	}
+
+	// 清除内部字段后返回
+	type ProcessVO struct {
+		Name        string `json:"name"`
+		PID         int    `json:"pid"`
+		SessionName string `json:"sessionName"`
+		MemUsage    string `json:"memUsage"`
+	}
+	vo := make([]ProcessVO, len(processes))
+	for i, p := range processes {
+		vo[i] = ProcessVO{Name: p.Name, PID: p.PID, SessionName: p.SessionName, MemUsage: p.MemUsage}
+	}
+
+	result, err := json.Marshal(vo)
+	if err != nil {
+		return CommandResult{Success: false, Error: fmt.Sprintf("序列化进程列表失败: %v", err)}
+	}
+	return CommandResult{Success: true, Result: string(result)}
+}
+
+// parseMemBytes 将 tasklist 的内存字符串转为字节数用于排序
+// 格式如 "8,888 K" 或 "123,456 K"
+func parseMemBytes(memStr string) int64 {
+	// 去掉逗号和单位
+	cleaned := strings.TrimSuffix(memStr, " K")
+	cleaned = strings.TrimSuffix(cleaned, " M")
+	cleaned = strings.ReplaceAll(cleaned, ",", "")
+	cleaned = strings.TrimSpace(cleaned)
+	val, err := strconv.ParseInt(cleaned, 10, 64)
+	if err != nil {
+		return 0
+	}
+	if strings.HasSuffix(memStr, " M") {
+		return val * 1024 * 1024
+	}
+	return val * 1024 // 默认是 K
+}
+
+// killProcess 结束指定 PID 的进程，params 为 JSON 格式 {"pid": 1234}
+func (e *platformExecutor) killProcess(params string) CommandResult {
+	var req struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal([]byte(params), &req); err != nil {
+		return CommandResult{Success: false, Error: fmt.Sprintf("参数解析失败: %v", err)}
+	}
+	if req.PID <= 0 {
+		return CommandResult{Success: false, Error: "无效的PID"}
+	}
+
+	cmd := exec.Command("taskkill", "/F", "/PID", strconv.Itoa(req.PID))
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return CommandResult{
 			Success: false,
-			Error:   fmt.Sprintf("序列化进程列表失败: %v", err),
+			Error:   fmt.Sprintf("结束进程失败(PID=%d): %v - %s", req.PID, err, strings.TrimSpace(string(output))),
 		}
 	}
-	return CommandResult{Success: true, Result: result}
+	return CommandResult{
+		Success: true,
+		Result:  fmt.Sprintf("进程 %d 已终止", req.PID),
+	}
 }
 
-// lockScreen 锁屏 — 使用 rundll32 调用 LockWorkStation
+// lockScreen 锁屏
 func (e *platformExecutor) lockScreen() CommandResult {
 	cmd := exec.Command("rundll32.exe", "user32.dll,LockWorkStation")
 	if err := cmd.Run(); err != nil {
@@ -72,7 +133,7 @@ func (e *platformExecutor) lockScreen() CommandResult {
 	return CommandResult{Success: true, Result: "锁屏成功"}
 }
 
-// shutdown 远程关机 — 30秒延迟，允许用户取消
+// shutdown 远程关机 — 30秒延迟
 func (e *platformExecutor) shutdown() CommandResult {
 	cmd := exec.Command("shutdown", "/s", "/t", "30", "/c", "系统管理员已发起远程关机")
 	if err := cmd.Run(); err != nil {
@@ -97,12 +158,4 @@ func (e *platformExecutor) logoff() CommandResult {
 		return CommandResult{Success: false, Error: fmt.Sprintf("注销失败: %v", err)}
 	}
 	return CommandResult{Success: true, Result: "注销成功"}
-}
-
-func toJSON(v interface{}) (string, error) {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
 }

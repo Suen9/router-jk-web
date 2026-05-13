@@ -22,8 +22,12 @@ Thumbs.db
 .env
 .env.local
 
-# Markdown docs (project instructions, not for remote)
-*.md
+
 
 # Claude local config
 .claude/settings.local.json
+
+#  go
+pc-agent/.agent_token.json
+pc-agent/pc-agent.exe
+pc-agent/pc-agent.log

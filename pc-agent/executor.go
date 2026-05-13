@@ -11,7 +11,6 @@ type CommandResult struct {
 
 // Executor 指令执行器接口 — 根据指令类型执行对应操作
 type Executor interface {
-	// Execute 执行指定类型的指令，params 为可选参数
 	Execute(commandType string, params string) CommandResult
 }
 
@@ -20,7 +19,6 @@ func NewExecutor() Executor {
 	return &platformExecutor{}
 }
 
-// platformExecutor 平台特定的执行器 — 具体方法在 _windows.go 或 _default.go 中实现
 type platformExecutor struct{}
 
 // Execute 根据指令类型分发执行
@@ -36,6 +34,8 @@ func (e *platformExecutor) Execute(commandType string, params string) CommandRes
 		return e.restart()
 	case "LOGOFF":
 		return e.logoff()
+	case "KILL_PROCESS":
+		return e.killProcess(params)
 	default:
 		return CommandResult{
 			Success: false,

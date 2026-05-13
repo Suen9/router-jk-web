@@ -8,8 +8,12 @@ func (e *platformExecutor) getProcesses() CommandResult {
 	return CommandResult{Success: false, Error: "进程列表仅支持 Windows 平台"}
 }
 
+func (e *platformExecutor) killProcess(params string) CommandResult {
+	return CommandResult{Success: false, Error: "结束进程仅支持 Windows 平台"}
+}
+
 func (e *platformExecutor) lockScreen() CommandResult {
-	return CommandResult{Success: false, Error: fmt.Sprintf("锁屏仅支持 Windows 平台")}
+	return CommandResult{Success: false, Error: "锁屏仅支持 Windows 平台"}
 }
 
 func (e *platformExecutor) shutdown() CommandResult {

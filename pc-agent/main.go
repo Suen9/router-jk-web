@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -10,50 +12,67 @@ import (
 )
 
 const (
-	configFile  = "config.json"             // 配置文件路径
-	tokenFile   = ".agent_token.json"       // token 缓存文件
-	pollInterval = 5 * time.Second          // 轮询间隔
+	configFile   = "config.json"       // 配置文件路径
+	tokenFile    = ".agent_token.json" // token 缓存文件
+	logFile      = "pc-agent.log"      // 日志文件
+	pollInterval = 5 * time.Second     // 轮询间隔
 )
 
-func main() {
-	fmt.Println("=== PC Agent ===")
+var logger *log.Logger
 
+func main() {
 	// 获取程序所在目录作为工作目录
 	exePath, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "获取可执行文件路径失败: %v\n", err)
+		pauseError("获取可执行文件路径失败: %v", err)
 		os.Exit(1)
 	}
 	workDir := filepath.Dir(exePath)
 	if err := os.Chdir(workDir); err != nil {
-		fmt.Fprintf(os.Stderr, "切换工作目录失败: %v\n", err)
+		pauseError("切换工作目录失败: %v", err)
 		os.Exit(1)
 	}
-	fmt.Printf("[Agent] 工作目录: %s\n", workDir)
+
+	// 初始化日志：同时输出到控制台和文件
+	logPath := filepath.Join(workDir, logFile)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		pauseError("打开日志文件失败: %v", err)
+		os.Exit(1)
+	}
+	defer f.Close()
+	multi := io.MultiWriter(os.Stdout, f)
+	logger = log.New(multi, "", log.LstdFlags)
+
+	logger.Printf("=== PC Agent 启动 === 工作目录: %s", workDir)
 
 	// 加载配置
 	cfg, err := loadConfig(configFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
+		logger.Printf("[错误] 加载配置失败: %v", err)
+		pause("请检查 config.json 是否存在且格式正确，然后按 Enter 键退出...")
 		os.Exit(1)
 	}
-	fmt.Printf("[Agent] 后端地址: %s\n", cfg.BackendURL)
+	logger.Printf("[配置] 后端地址: %s", cfg.BackendURL)
 
 	// 初始化 HTTP 客户端
 	client := NewBackendClient(cfg.BackendURL)
 
 	// 尝试从本地加载 token
 	tokenPath := filepath.Join(workDir, tokenFile)
-	tokenStore, err := loadToken(tokenPath)
-	if err != nil {
-		fmt.Println("[Agent] 未找到本地 token，执行注册...")
-		// 首次运行，执行注册
+	tokenStore, loadErr := loadToken(tokenPath)
+	if loadErr != nil {
+		logger.Printf("[注册] 未找到本地 token，执行注册...")
 		if err := registerAgent(client, tokenPath); err != nil {
-			fmt.Fprintf(os.Stderr, "注册失败: %v\n", err)
+			logger.Printf("[错误] 注册失败: %v", err)
+			logger.Printf("[提示] 请确认后端服务 (%s) 已启动且网络可达", cfg.BackendURL)
+			pause("按 Enter 键退出...")
 			os.Exit(1)
 		}
+		// 重新加载 token
+		tokenStore, _ = loadToken(tokenPath)
 	} else {
-		fmt.Printf("[Agent] 加载本地 token, DeviceID=%d\n", tokenStore.DeviceID)
+		logger.Printf("[认证] 加载本地 token, DeviceID=%d", tokenStore.DeviceID)
 		client.SetToken(tokenStore.AgentToken)
 	}
 
@@ -64,7 +83,8 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	fmt.Println("[Agent] 启动完成，进入主循环...")
+	logger.Printf("[就绪] Agent 启动成功，进入运行循环（每 %v 轮询一次）", pollInterval)
+	logger.Printf("[提示] 日志文件: %s", logPath)
 
 	// 主循环：心跳 + 指令轮询
 	ticker := time.NewTicker(pollInterval)
@@ -73,7 +93,7 @@ func main() {
 	for {
 		select {
 		case <-sigCh:
-			fmt.Println("\n[Agent] 收到退出信号，停止运行")
+			logger.Println("[退出] 收到退出信号，停止运行")
 			return
 
 		case <-ticker.C:
@@ -90,7 +110,7 @@ func doHeartbeat(client *BackendClient) {
 		ip = "0.0.0.0"
 	}
 	if err := client.Heartbeat(ip); err != nil {
-		fmt.Printf("[心跳] 失败: %v\n", err)
+		logger.Printf("[心跳] 失败: %v", err)
 	}
 }
 
@@ -98,22 +118,37 @@ func doHeartbeat(client *BackendClient) {
 func doPollAndExecute(client *BackendClient, executor Executor) {
 	cmd, err := client.PollCommand()
 	if err != nil {
-		// 无指令时不输出日志，避免日志过多
 		return
 	}
 	if cmd == nil {
-		return // 无待执行指令
+		return
 	}
 
-	fmt.Printf("[指令] 收到指令: type=%s id=%d\n", cmd.CommandType, cmd.CommandID)
-
-	// 执行指令
+	logger.Printf("[指令] 收到指令: type=%s id=%d", cmd.CommandType, cmd.CommandID)
 	result := executor.Execute(cmd.CommandType, cmd.Params)
 
-	// 上报结果
 	if err := client.ReportResult(cmd.CommandID, result.Success, result.Result, result.Error); err != nil {
-		fmt.Printf("[指令] 上报结果失败: %v\n", err)
+		logger.Printf("[指令] 上报结果失败: %v", err)
 	} else {
-		fmt.Printf("[指令] 执行完成: type=%s success=%v\n", cmd.CommandType, result.Success)
+		logger.Printf("[指令] 执行完成: type=%s success=%v", cmd.CommandType, result.Success)
 	}
+}
+
+// pauseError 输出错误日志并显示暂停提示
+func pauseError(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	// 尝试写入日志文件
+	if f, e := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); e == nil {
+		defer f.Close()
+		fmt.Fprintf(f, "[%s] [严重] %s\n", time.Now().Format("2006/01/02 15:04:05"), msg)
+	}
+	fmt.Fprintf(os.Stderr, "[严重] %s\n", msg)
+	pause("发生严重错误，按 Enter 键退出...")
+}
+
+// pause 显示提示并等待用户按 Enter
+func pause(msg string) {
+	fmt.Print(msg)
+	var buf [1]byte
+	os.Stdin.Read(buf[:])
 }
