@@ -31,3 +31,16 @@ export function getPcCommandList(params?: any) {
 export function getPcCommandDetail(id: number) {
   return api.get(`/pc/command/${id}`)
 }
+
+// 弹窗消息模板
+export function getMessageTemplates() {
+  return api.get('/pc/message-template/list')
+}
+
+export function addMessageTemplate(data: { content: string }) {
+  return api.post('/pc/message-template/add', data)
+}
+
+export function removeMessageTemplate(id: number) {
+  return api.delete(`/pc/message-template/${id}`)
+}

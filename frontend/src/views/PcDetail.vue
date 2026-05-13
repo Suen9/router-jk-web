@@ -57,6 +57,7 @@
           <button class="btn btn-danger" @click="confirmAction = 'SHUTDOWN'; showConfirm = true" :disabled="deviceStatus !== 'online'">远程关机</button>
           <button class="btn btn-danger" @click="confirmAction = 'RESTART'; showConfirm = true" :disabled="deviceStatus !== 'online'">远程重启</button>
           <button class="btn" @click="handleCommand('LOGOFF')" :disabled="deviceStatus !== 'online'">注销用户</button>
+          <button class="btn" @click="showMessageModal = true" :disabled="deviceStatus !== 'online'">发送弹窗消息</button>
         </div>
       </div>
     </div>
@@ -169,15 +170,57 @@
         </div>
       </div>
     </div>
+
+    <!-- Send message modal -->
+    <div class="modal-mask" v-if="showMessageModal" @click.self="showMessageModal = false">
+      <div class="modal" style="max-width:500px;">
+        <div class="modal-header">
+          <h3>发送弹窗消息</h3>
+          <button class="close" @click="showMessageModal = false">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>消息内容</label>
+            <textarea v-model="messageText" placeholder="请输入要发送的消息内容" style="min-height:80px;"></textarea>
+          </div>
+
+          <div style="margin-top:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <label style="font-weight:600;font-size:13px;color:#333;">常用提示词</label>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+              <span v-for="tpl in templates" :key="tpl.id"
+                style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#f0f5ff;border:1px solid #d6e4ff;border-radius:16px;font-size:13px;cursor:pointer;color:#2b5fd9;max-width:100%;"
+                @click="messageText = tpl.content">
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ tpl.content }}</span>
+                <span style="cursor:pointer;font-size:16px;line-height:1;color:#999;flex-shrink:0;" @click.stop="doRemoveTemplate(tpl.id)">&times;</span>
+              </span>
+              <span v-if="templates.length === 0" style="color:#999;font-size:13px;">暂无预设提示词</span>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <input v-model="newTemplateContent" placeholder="新增常用提示词" style="flex:1;" />
+              <button class="btn btn-mini btn-primary" @click="doAddTemplate" :disabled="!newTemplateContent.trim()">添加</button>
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;padding-top:16px;border-top:1px solid var(--line);">
+            <button class="btn" @click="showMessageModal = false">取消</button>
+            <button class="btn btn-primary" @click="doSendMessage" :disabled="!messageText.trim() || sendingMessage">
+              {{ sendingMessage ? '发送中...' : '发送' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
     </a-spin>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message, modal } from 'ant-design-vue'
-import { getPcDeviceDetail, sendCommand, getPcCommandList } from '../api/pc'
+import { getPcDeviceDetail, sendCommand, getPcCommandList, getMessageTemplates, addMessageTemplate, removeMessageTemplate } from '../api/pc'
 
 const route = useRoute()
 const router = useRouter()
@@ -195,6 +238,13 @@ const commands = ref<any[]>([])
 const showKillConfirm = ref(false)
 const killTarget = ref<any>(null)
 const killingProcess = ref(false)
+
+// 弹窗消息
+const showMessageModal = ref(false)
+const messageText = ref('')
+const templates = ref<any[]>([])
+const newTemplateContent = ref('')
+const sendingMessage = ref(false)
 
 const filteredProcesses = computed(() => {
   if (!processFilter.value) return processes.value
@@ -331,6 +381,56 @@ async function doKillProcess() {
     setTimeout(refreshCommands, 2000)
   } catch (e) { message.error('指令下发失败') } finally { killingProcess.value = false }
 }
+
+// 弹窗消息 — 加载预设模板
+async function loadTemplates() {
+  try {
+    const res: any = await getMessageTemplates()
+    templates.value = res.data || []
+  } catch { /* ignore */ }
+}
+
+// 弹窗消息 — 新增预设
+async function doAddTemplate() {
+  const content = newTemplateContent.value.trim()
+  if (!content) return
+  try {
+    await addMessageTemplate({ content })
+    newTemplateContent.value = ''
+    await loadTemplates()
+    message.success('预设已添加')
+  } catch { message.error('添加失败') }
+}
+
+// 弹窗消息 — 删除预设
+async function doRemoveTemplate(id: number) {
+  try {
+    await removeMessageTemplate(id)
+    await loadTemplates()
+  } catch { message.error('删除失败') }
+}
+
+// 弹窗消息 — 发送
+async function doSendMessage() {
+  const msg = messageText.value.trim()
+  if (!msg) return
+  sendingMessage.value = true
+  try {
+    await sendCommand(deviceId, 'SHOW_MESSAGE', JSON.stringify({ message: msg }))
+    message.success('弹窗消息指令已下发')
+    showMessageModal.value = false
+    messageText.value = ''
+    setTimeout(refreshCommands, 2000)
+  } catch { message.error('指令下发失败') } finally { sendingMessage.value = false }
+}
+
+watch(showMessageModal, (val) => {
+  if (val) {
+    messageText.value = ''
+    newTemplateContent.value = ''
+    loadTemplates()
+  }
+})
 
 onMounted(() => {
   loadDevice()

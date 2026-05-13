@@ -27,3 +27,7 @@ func (e *platformExecutor) restart() CommandResult {
 func (e *platformExecutor) logoff() CommandResult {
 	return CommandResult{Success: false, Error: "注销仅支持 Windows 平台"}
 }
+
+func (e *platformExecutor) showMessage(params string) CommandResult {
+	return CommandResult{Success: false, Error: "弹窗仅支持 Windows 平台"}
+}

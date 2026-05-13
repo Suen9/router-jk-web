@@ -159,3 +159,38 @@ func (e *platformExecutor) logoff() CommandResult {
 	}
 	return CommandResult{Success: true, Result: "注销成功"}
 }
+
+// showMessage 远程弹窗显示消息
+// params 为 JSON 格式 {"message": "要显示的内容"}
+func (e *platformExecutor) showMessage(params string) CommandResult {
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(params), &req); err != nil {
+		return CommandResult{Success: false, Error: fmt.Sprintf("参数解析失败: %v", err)}
+	}
+	if req.Message == "" {
+		return CommandResult{Success: false, Error: "消息内容不能为空"}
+	}
+
+	// 方式1：使用 msg.exe（系统原生弹窗，始终置顶，Session 0 隔离下也能正常工作）
+	msg := exec.Command("msg", "*", "/TIME:120", req.Message)
+	if err := msg.Run(); err == nil {
+		return CommandResult{Success: true, Result: "消息已发送"}
+	}
+
+	// 方式2：回退到 PowerShell MessageBox（使用 DefaultDesktopOnly 确保置顶显示）
+	escaped := strings.ReplaceAll(req.Message, "'", "''")
+	psCmd := fmt.Sprintf(
+		`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('%s', '系统消息', 'OK', 'Information', 'Button1', 'DefaultDesktopOnly')`,
+		escaped,
+	)
+	ps := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	if err := ps.Run(); err != nil {
+		return CommandResult{
+			Success: false,
+			Error:   fmt.Sprintf("弹窗失败(msg和PowerShell均不可用): %v", err),
+		}
+	}
+	return CommandResult{Success: true, Result: "消息已发送"}
+}

@@ -30,4 +30,5 @@ Thumbs.db
 #  go
 pc-agent/.agent_token.json
 pc-agent/pc-agent.exe
+pc-agent/pc-agent-dev-build.exe
 pc-agent/pc-agent.log

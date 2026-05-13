@@ -36,6 +36,8 @@ func (e *platformExecutor) Execute(commandType string, params string) CommandRes
 		return e.logoff()
 	case "KILL_PROCESS":
 		return e.killProcess(params)
+	case "SHOW_MESSAGE":
+		return e.showMessage(params)
 	default:
 		return CommandResult{
 			Success: false,

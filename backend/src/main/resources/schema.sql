@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS pc_device (
 CREATE TABLE IF NOT EXISTS pc_command (
     id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     pc_device_id BIGINT NOT NULL COMMENT '目标PC ID',
-    command_type VARCHAR(30) NOT NULL COMMENT '指令类型: PROCESSES/LOCK_SCREEN/SHUTDOWN/RESTART/LOGOFF',
+    command_type VARCHAR(30) NOT NULL COMMENT '指令类型: PROCESSES/LOCK_SCREEN/SHUTDOWN/RESTART/LOGOFF/SHOW_MESSAGE/KILL_PROCESS',
     params VARCHAR(1000) COMMENT '指令参数(JSON)',
     status VARCHAR(20) DEFAULT 'pending' COMMENT 'pending/sent/executing/success/failed',
     result TEXT COMMENT '执行结果',
@@ -82,3 +82,10 @@ CREATE TABLE IF NOT EXISTS pc_command (
     INDEX idx_device_status (pc_device_id, status),
     INDEX idx_status_time (status, create_time)
 ) COMMENT='PC指令表';
+
+CREATE TABLE IF NOT EXISTS pc_message_template (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    content VARCHAR(500) NOT NULL COMMENT '消息内容',
+    sort_order INT DEFAULT 0 COMMENT '排序号',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='PC弹窗消息模板';
