@@ -21,6 +21,7 @@
       <div class="section-body">
         <div class="notice">
           <table style="width:100%;">
+            <tbody>
             <tr><td style="width:100px;color:#999;">主机名</td><td>{{ device?.hostname || '-' }}</td></tr>
             <tr><td style="color:#999;">IP</td><td>{{ device?.ip || '-' }}</td></tr>
             <tr><td style="color:#999;">MAC</td><td>{{ device?.mac || '-' }}</td></tr>
@@ -35,6 +36,7 @@
             </tr>
             <tr><td style="color:#999;">最后心跳</td><td>{{ device?.lastHeartbeat ? formatTime(device.lastHeartbeat) : '-' }}</td></tr>
             <tr><td style="color:#999;">备注</td><td>{{ device?.remark || '-' }}</td></tr>
+            </tbody>
           </table>
         </div>
       </div>
@@ -73,6 +75,7 @@
       <div class="section-body">
         <div class="notice" style="margin-bottom:16px;">
           <table style="width:100%;">
+            <tbody>
             <tr><td style="width:80px;color:#999;">MAC</td><td><code>{{ device?.mac || '-' }}</code></td></tr>
             <tr v-if="supervisionRule">
               <td style="color:#999;">匹配规则</td>
@@ -81,11 +84,13 @@
                 <span style="margin-left:8px;">{{ supervisionRule.hostname || '-' }}</span>
               </td>
             </tr>
+            </tbody>
           </table>
         </div>
 
         <div v-if="supervisionRule">
           <table style="width:100%;margin-bottom:16px;">
+            <tbody>
             <tr><td style="width:100px;color:#999;">时间段</td><td>{{ formatTimeSlots(supervisionRule.timeSlots) }}</td></tr>
             <tr><td style="color:#999;">单次时长</td><td>{{ supervisionRule.singleDuration || '-' }} 分钟</td></tr>
             <tr><td style="color:#999;">每日限额</td><td>{{ supervisionRule.dailyLimit || '-' }} 分钟</td></tr>
@@ -105,6 +110,7 @@
                 </span>
               </td>
             </tr>
+            </tbody>
           </table>
           <div style="display:flex;gap:10px;flex-wrap:wrap;">
             <div style="display:flex;align-items:center;gap:6px;">
