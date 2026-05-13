@@ -189,7 +189,7 @@ func (e *platformExecutor) showMessage(params string) CommandResult {
 		// 简单弹窗：通过 schtasks 在用户桌面显示 PowerShell MessageBox
 		escaped := strings.ReplaceAll(req.Message, "'", "''")
 		psCmd := fmt.Sprintf(
-			`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('%s', '系统消息', 'OK', 'Information', 'Button1', 'DefaultDesktopOnly')`,
+			`Add-Type -AssemblyName System.Windows.Forms; $f=New-Object Windows.Forms.Form; $f.Text='系统消息'; $f.Width=400; $f.Height=150; $f.StartPosition='CenterScreen'; $f.TopMost=$true; $f.FormBorderStyle='FixedDialog'; $f.ControlBox=$false; $l=New-Object Windows.Forms.Label; $l.Text='%s'; $l.AutoSize=$true; $l.Location=New-Object Drawing.Point(20,40); $f.Controls.Add($l); $b=New-Object Windows.Forms.Button; $b.Text='确定'; $b.Location=New-Object Drawing.Point(160,80); $b.Add_Click({$f.Close()}); $f.Controls.Add($b); $f.ShowDialog()`,
 			escaped,
 		)
 		if err := e.runInUserSession(psCmd); err != nil {
@@ -265,6 +265,7 @@ $btnExtend.Location = New-Object Drawing.Point(80, 70)
 $btnExtend.Add_Click({
 	try {
 		$wc = New-Object System.Net.WebClient
+		$wc.Headers.Add('Content-Type', 'application/json')
 		$null = $wc.UploadString('%s', 'POST', '%s')
 	} catch {}
 	$form.Close()
