@@ -62,6 +62,99 @@
       </div>
     </div>
 
+    <!-- Supervision -->
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <h3>监管设置</h3>
+          <div class="sub">通过 MAC 地址匹配监管规则，超限时自动锁屏</div>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="notice" style="margin-bottom:16px;">
+          <table style="width:100%;">
+            <tr><td style="width:80px;color:#999;">MAC</td><td><code>{{ device?.mac || '-' }}</code></td></tr>
+            <tr v-if="supervisionRule">
+              <td style="color:#999;">匹配规则</td>
+              <td>
+                <span :class="['tag', 'tag-success']">已绑定</span>
+                <span style="margin-left:8px;">{{ supervisionRule.hostname || '-' }}</span>
+              </td>
+            </tr>
+          </table>
+        </div>
+
+        <div v-if="supervisionRule">
+          <table style="width:100%;margin-bottom:16px;">
+            <tr><td style="width:100px;color:#999;">时间段</td><td>{{ formatTimeSlots(supervisionRule.timeSlots) }}</td></tr>
+            <tr><td style="color:#999;">单次时长</td><td>{{ supervisionRule.singleDuration || '-' }} 分钟</td></tr>
+            <tr><td style="color:#999;">每日限额</td><td>{{ supervisionRule.dailyLimit || '-' }} 分钟</td></tr>
+            <tr><td style="color:#999;">今日已用</td><td>
+              <span :style="{color: (supervisionRule.pcUsedTodayMinutes || 0) > (supervisionRule.dailyLimit || 9999) * 0.8 ? 'red' : ''}">
+                {{ supervisionRule.pcUsedTodayMinutes || 0 }} 分钟
+              </span>
+            </td></tr>
+            <tr><td style="color:#999;">剩余时间</td><td><strong>{{ supervisionRule.remaining || 0 }} 分钟</strong></td></tr>
+            <tr><td style="color:#999;">状态</td>
+              <td>
+                <span v-if="supervisionRule.extendActive === 1" class="tag tag-warning">延时中</span>
+                <span v-else-if="supervisionRule.blacklistedBySupervision === 1" class="tag tag-danger">已锁屏</span>
+                <span v-else class="tag tag-success">正常</span>
+                <span v-if="supervisionRule.extendActive === 1 && supervisionRule.extendExpireMinutes != null" style="margin-left:8px;color:#999;">
+                  剩余 {{ supervisionRule.extendExpireMinutes }} 分钟
+                </span>
+              </td>
+            </tr>
+          </table>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:13px;white-space:nowrap;">延长</span>
+              <input v-model="extendMinutes" type="number" min="1" max="120" style="width:60px;" placeholder="分钟" />
+              <button class="btn btn-mini btn-primary" @click="doExtendSupervision" :disabled="supervisionRule.extendActive === 1">确认延长</button>
+            </div>
+            <button class="btn btn-mini btn-danger" @click="doUnbindSupervision" :disabled="supervisionRule.extendActive === 1">解除绑定</button>
+          </div>
+        </div>
+
+        <div v-else>
+          <p style="color:#999;margin-bottom:12px;">该 PC 未绑定监管规则</p>
+          <button class="btn btn-primary" @click="showBindModal = true">绑定监管规则</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bind supervision modal -->
+    <div class="modal-mask" v-if="showBindModal" @click.self="showBindModal = false">
+      <div class="modal" style="max-width:450px;">
+        <div class="modal-header">
+          <h3>绑定监管规则</h3>
+          <button class="close" @click="showBindModal = false">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div style="margin-bottom:12px;">
+            <label style="font-weight:600;">选择已有规则</label>
+            <select v-model="selectedRuleId" style="width:100%;margin-top:4px;">
+              <option :value="null">— 请选择 —</option>
+              <option v-for="r in availableRules" :key="r.id" :value="r.id">
+                {{ r.hostname || r.mac }} ({{ formatTimeSlots(r.timeSlots) }})
+              </option>
+            </select>
+            <div style="margin-top:6px;">
+              <button class="btn btn-mini" @click="doBindExisting" :disabled="!selectedRuleId">绑定选中规则</button>
+              <span style="margin-left:8px;font-size:12px;color:#999;">将规则的 MAC 改为当前 PC 的 MAC</span>
+            </div>
+          </div>
+          <div style="border-top:1px solid var(--line);padding-top:12px;margin-top:12px;">
+            <label style="font-weight:600;">或新建监管规则</label>
+            <div class="field" style="margin-top:8px;"><label>时间段</label><input v-model="newRule.timeSlots" placeholder='["08:00-12:00","14:00-18:00"]' /></div>
+            <div class="field" style="margin-top:6px;"><label>单次时长(分钟)</label><input v-model.number="newRule.singleDuration" type="number" /></div>
+            <div class="field" style="margin-top:6px;"><label>每日限额(分钟)</label><input v-model.number="newRule.dailyLimit" type="number" /></div>
+            <button class="btn btn-primary" @click="doCreateAndBind" style="margin-top:8px;" :disabled="!newRule.timeSlots">创建并绑定</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Process List -->
     <div class="section" v-if="processes.length > 0">
       <div class="section-header">
@@ -221,6 +314,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message, modal } from 'ant-design-vue'
 import { getPcDeviceDetail, sendCommand, getPcCommandList, getMessageTemplates, addMessageTemplate, removeMessageTemplate } from '../api/pc'
+import { getSupervisionList, addSupervision, updateSupervisionRule, extendSupervision, removeSupervision } from '../api/supervision'
 
 const route = useRoute()
 const router = useRouter()
@@ -245,6 +339,14 @@ const messageText = ref('')
 const templates = ref<any[]>([])
 const newTemplateContent = ref('')
 const sendingMessage = ref(false)
+
+// 监管绑定
+const supervisionRule = ref<any>(null)
+const showBindModal = ref(false)
+const selectedRuleId = ref<number | null>(null)
+const availableRules = ref<any[]>([])
+const extendMinutes = ref(30)
+const newRule = ref({ timeSlots: '["08:00-12:00","14:00-20:00"]', singleDuration: 120, dailyLimit: 240 })
 
 const filteredProcesses = computed(() => {
   if (!processFilter.value) return processes.value
@@ -424,6 +526,93 @@ async function doSendMessage() {
   } catch { message.error('指令下发失败') } finally { sendingMessage.value = false }
 }
 
+// 监管 — 加载匹配的监管规则
+async function loadSupervision() {
+  try {
+    const res: any = await getSupervisionList()
+    const allRules = res.data || []
+    supervisionRule.value = allRules.find((r: any) =>
+      r.mac && device.value?.mac && r.mac.toLowerCase() === device.value.mac.toLowerCase()
+    ) || null
+  } catch { /* ignore */ }
+}
+
+// 监管 — 加载可绑定规则（未被其他 PC 使用的规则）
+async function loadAvailableRules() {
+  try {
+    const res: any = await getSupervisionList()
+    const allRules = res.data || []
+    // 过滤出可绑定的规则：mac 为 null 或 空，或与当前 PC MAC 相同（已在绑定中）
+    availableRules.value = allRules.filter((r: any) =>
+      !r.mac || r.mac === '' || (device.value?.mac && r.mac.toLowerCase() === device.value.mac.toLowerCase())
+    )
+  } catch { /* ignore */ }
+}
+
+// 监管 — 格式化时间段
+function formatTimeSlots(json: string) {
+  if (!json) return '-'
+  try {
+    return JSON.parse(json).join(' / ')
+  } catch { return json }
+}
+
+// 监管 — 延长
+async function doExtendSupervision() {
+  if (!supervisionRule.value || !extendMinutes.value) return
+  try {
+    await extendSupervision(supervisionRule.value.id, extendMinutes.value)
+    message.success(`已延长 ${extendMinutes.value} 分钟`)
+    setTimeout(loadSupervision, 1000)
+  } catch { message.error('延长失败') }
+}
+
+// 监管 — 绑定已有规则
+async function doBindExisting() {
+  if (!selectedRuleId.value || !device.value?.mac) return
+  try {
+    await updateSupervisionRule(selectedRuleId.value, { mac: device.value.mac })
+    message.success('已绑定监管规则')
+    showBindModal.value = false
+    selectedRuleId.value = null
+    loadSupervision()
+  } catch { message.error('绑定失败') }
+}
+
+// 监管 — 创建新规则并绑定
+async function doCreateAndBind() {
+  if (!device.value?.mac || !newRule.value.timeSlots) return
+  try {
+    await addSupervision({
+      mac: device.value.mac,
+      hostname: device.value.hostname || device.value.mac,
+      timeSlots: newRule.value.timeSlots,
+      singleDuration: newRule.value.singleDuration,
+      dailyLimit: newRule.value.dailyLimit
+    })
+    message.success('已创建并绑定监管规则')
+    showBindModal.value = false
+    loadSupervision()
+  } catch { message.error('创建失败') }
+}
+
+// 监管 — 解除绑定（删除规则）
+async function doUnbindSupervision() {
+  if (!supervisionRule.value) return
+  try {
+    await removeSupervision(supervisionRule.value.id)
+    message.success('已解除绑定')
+    loadSupervision()
+  } catch { message.error('解绑失败') }
+}
+
+watch(showBindModal, (val) => {
+  if (val) {
+    selectedRuleId.value = null
+    loadAvailableRules()
+  }
+})
+
 watch(showMessageModal, (val) => {
   if (val) {
     messageText.value = ''
@@ -433,7 +622,7 @@ watch(showMessageModal, (val) => {
 })
 
 onMounted(() => {
-  loadDevice()
+  loadDevice().then(() => loadSupervision())
   refreshCommands()
 })
 </script>
