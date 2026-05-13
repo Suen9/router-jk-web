@@ -207,11 +207,11 @@ func (e *platformExecutor) runInUserSession(psCommand string) error {
 	taskName := fmt.Sprintf("PCAgent_%d", timestamp)
 	psPath := filepath.Join(os.TempDir(), taskName+".ps1")
 
-	if err := os.WriteFile(psPath, []byte(psCommand), 0644); err != nil {
+	if err := os.WriteFile(psPath, append([]byte{0xEF, 0xBB, 0xBF}, []byte(psCommand)...), 0644); err != nil {
 		return err
 	}
 
-	psCmdLine := fmt.Sprintf(`powershell -ExecutionPolicy Bypass -File "%s"`, psPath)
+	psCmdLine := fmt.Sprintf(`powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File "%s"`, psPath)
 
 	// 创建计划任务并以交互用户身份运行（Session 0 → 用户桌面 Session 1）
 	if err := exec.Command("schtasks", "/create", "/tn", taskName, "/ru", "INTERACTIVE",
