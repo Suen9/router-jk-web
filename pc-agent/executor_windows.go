@@ -186,16 +186,17 @@ func (e *platformExecutor) showMessage(params string) CommandResult {
 		// 交互式延长对话框
 		e.launchExtendPrompt(req.Message, req.RuleID, req.ExtendMinutes)
 	} else {
-		// 简单弹窗：通过 schtasks 在用户桌面显示 PowerShell MessageBox
-		escaped := strings.ReplaceAll(req.Message, "'", "''")
-		psCmd := fmt.Sprintf(
-			`Add-Type -AssemblyName System.Windows.Forms; $f=New-Object Windows.Forms.Form; $f.Text='系统消息'; $f.Width=400; $f.Height=150; $f.StartPosition='CenterScreen'; $f.TopMost=$true; $f.FormBorderStyle='FixedDialog'; $f.ControlBox=$false; $l=New-Object Windows.Forms.Label; $l.Text='%s'; $l.AutoSize=$true; $l.Location=New-Object Drawing.Point(20,40); $f.Controls.Add($l); $b=New-Object Windows.Forms.Button; $b.Text='确定'; $b.Location=New-Object Drawing.Point(160,80); $b.Add_Click({$f.Close()}); $f.Controls.Add($b); $f.ShowDialog()`,
-			escaped,
-		)
-		if err := e.runInUserSession(psCmd); err != nil {
-			// 终极回退：msg.exe（可能在 Session 0 不可见，但作为最后手段）
-			msg := exec.Command("msg", "*", "/TIME:60", req.Message)
-			msg.Run()
+		// 简单弹窗：msg.exe 优先（系统原生弹窗，始终置顶），失败则回退到 PowerShell MessageBox
+		msg := exec.Command("msg", "*", "/TIME:120", req.Message)
+		if err := msg.Run(); err != nil {
+			// 回退：PowerShell MessageBox（DefaultDesktopOnly 跨 Session 显示并置顶）
+			escaped := strings.ReplaceAll(req.Message, "'", "''")
+			psCmd := fmt.Sprintf(
+				`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('%s', '系统消息', 'OK', 'Information', 'Button1', 'DefaultDesktopOnly')`,
+				escaped,
+			)
+			ps := exec.Command("powershell", "-NoProfile", "-WindowStyle Hidden", "-NonInteractive", "-Command", psCmd)
+			ps.Run()
 		}
 	}
 	return CommandResult{Success: true, Result: "消息已发送"}
@@ -234,56 +235,59 @@ func (e *platformExecutor) runInUserSession(psCommand string) error {
 	return nil
 }
 
-// launchExtendPrompt 启动交互式延长对话框（通过 schtasks 在用户会话中运行）
+// runVBSScript 通过 schtasks + wscript.exe 在用户交互会话中运行 VBScript（无控制台窗口）
+func (e *platformExecutor) runVBSScript(vbsContent string) error {
+	timestamp := time.Now().UnixNano()
+	taskName := fmt.Sprintf("PCAgent_%d", timestamp)
+	vbsPath := filepath.Join(os.TempDir(), taskName+".vbs")
+
+	if err := os.WriteFile(vbsPath, []byte(vbsContent), 0644); err != nil {
+		return err
+	}
+
+	vbsCmdLine := fmt.Sprintf(`wscript.exe "%s"`, vbsPath)
+
+	// 创建计划任务并以交互用户身份运行
+	if err := exec.Command("schtasks", "/create", "/tn", taskName, "/ru", "INTERACTIVE",
+		"/tr", vbsCmdLine, "/sc", "ONCE", "/st", "00:00", "/f").Run(); err != nil {
+		os.Remove(vbsPath)
+		return err
+	}
+
+	if err := exec.Command("schtasks", "/run", "/tn", taskName).Run(); err != nil {
+		exec.Command("schtasks", "/delete", "/tn", taskName, "/f").Run()
+		os.Remove(vbsPath)
+		return err
+	}
+
+	// 2 分钟后清理临时文件和计划任务
+	time.AfterFunc(2*time.Minute, func() {
+		_ = exec.Command("schtasks", "/delete", "/tn", taskName, "/f").Run()
+		_ = os.Remove(vbsPath)
+	})
+	return nil
+}
+
+// launchExtendPrompt 启动交互式延长对话框（PowerShell MessageBox + DefaultDesktopOnly 确保置顶）
 func (e *platformExecutor) launchExtendPrompt(message string, ruleID uint64, minutes int) {
 	extendURL := fmt.Sprintf("%s/api/supervision/extend/%d", e.backendURL, ruleID)
-	body := fmt.Sprintf(`{"minutes":%d}`, minutes)
-	psMsg := strings.ReplaceAll(message, "'", "''")
+	escapedMsg := strings.ReplaceAll(message, "'", "''")
 
-	// 生成 PowerShell 窗体脚本
-	psScript := fmt.Sprintf(`
-Add-Type -AssemblyName System.Windows.Forms
-$form = New-Object Windows.Forms.Form
-$form.Text = '使用时间预警'
-$form.Width = 400
-$form.Height = 150
-$form.StartPosition = 'CenterScreen'
-$form.TopMost = $true
-$form.FormBorderStyle = 'FixedDialog'
-$form.ControlBox = $false
-$label = New-Object Windows.Forms.Label
-$label.Text = '%s'
-$label.Font = New-Object Drawing.Font('Microsoft YaHei', 11)
-$label.AutoSize = $true
-$label.Location = New-Object Drawing.Point(20, 25)
-$form.Controls.Add($label)
-$btnExtend = New-Object Windows.Forms.Button
-$btnExtend.Text = '延长%d分钟'
-$btnExtend.Width = 120
-$btnExtend.Height = 35
-$btnExtend.Location = New-Object Drawing.Point(80, 70)
-$btnExtend.Add_Click({
-	try {
-		$wc = New-Object System.Net.WebClient
-		$wc.Headers.Add('Content-Type', 'application/json')
-		$null = $wc.UploadString('%s', 'POST', '%s')
-	} catch {}
-	$form.Close()
-})
-$form.Controls.Add($btnExtend)
-$btnClose = New-Object Windows.Forms.Button
-$btnClose.Text = '关闭'
-$btnClose.Width = 80
-$btnClose.Height = 35
-$btnClose.Location = New-Object Drawing.Point(220, 70)
-$btnClose.Add_Click({ $form.Close() })
-$form.Controls.Add($btnClose)
-$form.ShowDialog()
-`, psMsg, minutes, extendURL, body)
+	psScript := fmt.Sprintf(
+		`Add-Type -AssemblyName System.Windows.Forms
+$r=[System.Windows.Forms.MessageBox]::Show('%s', '使用时间预警', 'YesNo', 'Warning', 'Button1', 'DefaultDesktopOnly')
+if($r -eq 'Yes'){$wc=New-Object System.Net.WebClient;$wc.Headers.Add('Content-Type','application/json');$null=$wc.UploadString('%s','POST','{"minutes":%d}')}
+`,
+		escapedMsg, extendURL, minutes,
+	)
 
 	if err := e.runInUserSession(psScript); err != nil {
-		// 回退：仅显示文本消息
+		// 回退：仅显示 msg.exe 文本消息
 		msg := exec.Command("msg", "*", "/TIME:60", message)
 		msg.Run()
 	}
 }
+
+
+
+
